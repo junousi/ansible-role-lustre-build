@@ -1,4 +1,4 @@
-# Ansible Role: Lustre Builder
+# Ansible Role: ansible-role-lustre-build
 
 ## Purpose
 
@@ -68,7 +68,7 @@ Here is an example of how to use this role in a playbook (`playbook.yml`):
     # lustre_rpm_path: "/home/myuser/lustre_build/rpms" # Example for non-privileged path
 
   roles:
-    - lustre_builder
+    - ansible-role-lustre-build
 ```
 
 ## Usage Notes
