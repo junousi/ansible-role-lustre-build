@@ -1,0 +1,18 @@
+---
+# defaults file for lustre_builder
+
+# Lustre version to clone and build
+lustre_version: "master"  # Or a specific tag like "b2_15" or "2.15.4"
+
+# Base path for storing lustre source code
+lustre_src_path: "/usr/local/src/lustre"
+
+# Base path for storing compiled RPMs
+lustre_rpm_path: "/opt/lustre_rpms"
+
+# GPG key name or ID to use for signing RPMs
+# Ensure this key is present on the build machine's RPM keyring
+lustre_rpm_gpg_key: "" # e.g., "My Signing Key <myemail@example.com>"
+
+# Whether to sign the RPMs
+lustre_sign_rpms: false

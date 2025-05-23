@@ -1,0 +1,8 @@
+---
+# vars file for lustre_builder
+
+# Calculated path to the lustre source code checkout
+lustre_checkout_path: "{{ lustre_src_path }}/lustre-release-{{ lustre_version }}"
+
+# Calculated path for storing RPMs for the specific lustre_version
+lustre_version_rpm_path: "{{ lustre_rpm_path }}/{{ lustre_version }}"

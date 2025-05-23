@@ -1,0 +1,192 @@
+---
+# tasks file for lustre_builder
+
+- name: Ensure EPEL repository is enabled (RHEL family)
+  ansible.builtin.package:
+    name: epel-release
+    state: present
+  when: ansible_os_family == "RedHat"
+  become: true
+
+- name: Install Lustre build dependencies
+  ansible.builtin.package:
+    name:
+      # Common dependencies
+      - automake
+      - bc
+      - binutils-devel
+      - bison
+      - elfutils-devel
+      - elfutils-libelf-devel
+      - expect
+      - flex
+      - gcc
+      - gcc-c++
+      - git
+      - glib2
+      - glib2-devel
+      - hmaccalc
+      - krb5-devel
+      - libattr-devel
+      - libblkid-devel
+      - libselinux-devel
+      - libtool
+      - libuuid-devel
+      - libyaml-devel
+      - lsscsi
+      - make
+      - ncurses-devel
+      - net-snmp-devel
+      - net-tools
+      - patchutils
+      - pciutils-devel
+      - perl-ExtUtils-Embed  # Base attempt, SLES should use this. RHEL is handled next.
+      - pesign
+      - python3-devel
+      - rpm-build
+      - systemd-devel
+      - tcl
+      - tcl-devel
+      - tk
+      - tk-devel
+      - wget
+      - xmlto
+      - asciidoc
+      - zlib-devel
+      - kernel-devel # Base attempt, RHEL should use this. SLES is handled in a later task.
+      # RHEL/CentOS specific (will only be attempted if available)
+      - redhat-rpm-config
+      - yum-utils
+    state: present
+    update_cache: true # Equivalent to `yum check-update` or `zypper refresh` before installing
+  become: true
+  vars:
+    # This var is used in the next task, defining it here is acceptable though not ideal.
+    perl_extutils_pkg: "{{ 'perl-ExtUtils-MakeMaker' if ansible_os_family == 'RedHat' else 'perl-ExtUtils-Embed' }}"
+
+# This task specifically ensures the RedHat variant for perl-ExtUtils-Embed is installed.
+# If 'perl-ExtUtils-Embed' from the list above is not found on RHEL, this ensures functionality.
+# If it is found, 'perl-ExtUtils-MakeMaker' (which often provides Embed) is also ensured.
+- name: Ensure perl-ExtUtils-MakeMaker (for Embed) is installed on RHEL family
+  ansible.builtin.package:
+    name: "{{ perl_extutils_pkg }}" # Evaluates to perl-ExtUtils-MakeMaker on RedHat
+    state: present
+  become: true
+  when: ansible_os_family == "RedHat"
+
+# This task ensures the SLES variant for kernel-devel is installed.
+# If 'kernel-devel' from the list above is not found or not appropriate on SLES,
+# this ensures 'kernel-default-devel' is installed.
+- name: Install kernel development package for SLES family
+  ansible.builtin.package:
+    name:
+      - kernel-default-devel
+    state: present
+  become: true
+  when: ansible_os_family == "Suse"
+
+- name: Ensure base source directory exists
+  ansible.builtin.file:
+    path: "{{ lustre_src_path }}"
+    state: directory
+    mode: '0755'
+  become: true # If lustre_src_path is in a privileged location
+
+- name: Clone Lustre source code repository
+  ansible.builtin.git:
+    repo: https://github.com/lustre/lustre-release.git
+    dest: "{{ lustre_checkout_path }}"
+    version: "{{ lustre_version }}"
+    accept_hostkey: true # For public repo this is generally fine
+    force: true # Ensures the checkout is exactly at lustre_version, good for build consistency
+  become: true # If lustre_checkout_path is in a privileged location
+
+- name: Run autogen.sh for Lustre
+  ansible.builtin.shell:
+    cmd: sh autogen.sh
+    chdir: "{{ lustre_checkout_path }}"
+    creates: "{{ lustre_checkout_path }}/configure" # autogen.sh typically generates the configure script
+  become: true # Compilation steps might need root if source is in protected area or if build writes to system locations
+
+- name: Run configure for Lustre
+  ansible.builtin.command:
+    # Basic configure flags, can be expanded with a variable later
+    cmd: ./configure --enable-server --enable-client
+    chdir: "{{ lustre_checkout_path }}"
+    creates: "{{ lustre_checkout_path }}/Makefile" # configure script typically generates a Makefile
+  become: true
+
+- name: Build Lustre RPMs
+  ansible.builtin.command:
+    cmd: make rpms
+    chdir: "{{ lustre_checkout_path }}"
+    # This is harder to make idempotent with `creates` because RPM names are dynamic.
+    # We'll rely on the overall task sequence; if RPMs are already in lustre_version_rpm_path
+    # and signing is skipped or done, the user might not re-run.
+    # For a build role, re-running `make rpms` might be acceptable if it's smart enough
+    # not to rebuild everything, or if we always want fresh RPMs.
+  become: true
+  # Consider adding a timeout here, as builds can take a long time.
+  # async_status_timeout: 3600 # Example: 1 hour timeout for make rpms
+  # async: 3600 # Run for up to 1 hour
+  # poll: 60 # Check every 60 seconds
+
+- name: Ensure RPM output directory exists
+  ansible.builtin.file:
+    path: "{{ lustre_version_rpm_path }}"
+    state: directory
+    mode: '0755'
+  become: true # If lustre_rpm_path is in a privileged location
+
+- name: Find generated RPMs
+  ansible.builtin.find:
+    paths: "{{ lustre_checkout_path }}"
+    patterns: "*.rpm"
+    recurse: yes # Search in subdirectories like x86_64 too
+  register: found_rpms
+  become: true
+
+- name: Move compiled RPMs to destination directory
+  ansible.builtin.copy:
+    src: "{{ item.path }}"
+    dest: "{{ lustre_version_rpm_path }}/"
+    remote_src: true # Important: item.path is on the remote machine
+    mode: '0644'
+  loop: "{{ found_rpms.files }}"
+  when: found_rpms.files | length > 0
+  become: true # If lustre_version_rpm_path is in a privileged location
+
+- name: Ensure rpm-sign package is installed (for signing)
+  ansible.builtin.package:
+    name: rpm-sign
+    state: present
+  when: lustre_sign_rpms | bool and lustre_rpm_gpg_key | length > 0
+  become: true
+
+- name: Find RPMs in the versioned RPM path for signing
+  ansible.builtin.find:
+    paths:
+      - "{{ lustre_version_rpm_path }}"
+    patterns: "*.rpm"
+  register: rpms_to_sign
+  when: lustre_sign_rpms | bool and lustre_rpm_gpg_key | length > 0
+
+- name: Sign Lustre RPMs
+  community.general.rpm_sign:
+    path: "{{ item.path }}"
+    key_id: "{{ lustre_rpm_gpg_key }}"
+    # passphrase_file: /path/to/gpg_passphrase_file # Optional, if GPG key requires a passphrase
+                                                  # and you are managing it via a file.
+                                                  # Be very careful with passphrase management.
+                                                  # Using an agent (gpg-agent) is often preferred.
+  loop: "{{ rpms_to_sign.files }}"
+  when:
+    - lustre_sign_rpms | bool
+    - lustre_rpm_gpg_key | length > 0
+    - rpms_to_sign.files is defined
+    - rpms_to_sign.files | length > 0
+  become: true # rpm_sign might need to write to the RPM file, ensure permissions
+  # Note: The system running this task (Ansible target) must have the GPG key
+  # specified by lustre_rpm_gpg_key in its RPM keyring and access to the private key.
+  # This usually means importing the GPG key into the RPM database (`rpm --import PUBKEY`)
+  # and having the private key in the GPG keychain of the user executing the signing (usually root).
