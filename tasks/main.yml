@@ -139,30 +139,140 @@
   when: found_rpms.files | length > 0
   # become: true # REMOVED as per instruction
 
-- name: Ensure rpm-sign package is installed (for signing)
+- name: Ensure signing utilities are installed (rpm-sign, gnupg)
   ansible.builtin.package:
-    name: rpm-sign
+    name:
+      - rpm-sign
+      - gnupg
     state: present
-  when: lustre_sign_rpms | bool and lustre_rpm_gpg_key | length > 0
+  when: lustre_sign_rpms | bool and lustre_gpg_key_name | length > 0 # Updated variable name
   become: true # KEEP
 
+# --- GPG Key Generation (Optional) ---
+- name: Check if specified GPG key exists
+  ansible.builtin.command: "gpg --list-keys \"{{ lustre_gpg_key_name }}\""
+  register: gpg_key_check
+  failed_when: false
+  changed_when: false
+  no_log: true # gpg --list-keys is generally safe, but good practice if key_name could be sensitive
+  when:
+    - lustre_sign_rpms | bool
+    - lustre_gpg_key_name | length > 0
+    - lustre_generate_gpg_key_if_missing | bool
+  environment: "{{ { 'GNUPGHOME': lustre_gpg_home } if lustre_gpg_home | length > 0 else {} }}"
+
+- name: Create temporary file for GPG batch parameters
+  ansible.builtin.tempfile:
+    state: file
+    suffix: gpg_batch_params
+  register: gpg_param_tempfile
+  when:
+    - lustre_sign_rpms | bool
+    - lustre_gpg_key_name | length > 0
+    - lustre_generate_gpg_key_if_missing | bool
+    - gpg_key_check.rc != 0  # Key does not exist
+
+- name: Create GPG parameter file for key generation
+  ansible.builtin.copy:
+    content: |
+      %echo Generating a GPG key
+      Key-Type: {{ lustre_gpg_key_type }}
+      Key-Length: {{ lustre_gpg_key_length }}
+      Subkey-Type: ELG-E
+      Subkey-Length: {{ lustre_gpg_key_length }}
+      Name-Real: {{ lustre_gpg_real_name }}
+      Name-Comment: {{ lustre_gpg_comment }}
+      Name-Email: {{ lustre_gpg_email }}
+      Expire-Date: {{ lustre_gpg_key_expire_date }}
+      Passphrase: {{ (lustre_gpg_passphrase_file | length > 0) | ternary(lookup('file', lustre_gpg_passphrase_file), (lustre_gpg_passphrase if lustre_gpg_passphrase is defined and lustre_gpg_passphrase | length > 0 else "")) }}
+      %commit
+      %echo done
+    dest: "{{ gpg_param_tempfile.path }}"
+    mode: '0600'
+  when:
+    - lustre_sign_rpms | bool
+    - lustre_gpg_key_name | length > 0
+    - lustre_generate_gpg_key_if_missing | bool
+    - gpg_key_check.rc != 0  # Key does not exist
+    - gpg_param_tempfile.path is defined
+
+- name: Generate GPG key pair
+  ansible.builtin.command: "gpg --batch --full-generate-key --debug-quick-random {{ gpg_param_tempfile.path }}"
+  register: gpg_generate_result
+  changed_when: gpg_generate_result.rc == 0
+  when:
+    - lustre_sign_rpms | bool
+    - lustre_gpg_key_name | length > 0
+    - lustre_generate_gpg_key_if_missing | bool
+    - gpg_key_check.rc != 0  # Key does not exist
+    - gpg_param_tempfile.path is defined
+  environment: "{{ { 'GNUPGHOME': lustre_gpg_home } if lustre_gpg_home | length > 0 else {} }}"
+  # no_log: true # Consider if output of gpg command could be sensitive
+
+- name: Remove GPG parameter file
+  ansible.builtin.file:
+    path: "{{ gpg_param_tempfile.path }}"
+    state: absent
+  when:
+    - gpg_param_tempfile.path is defined # Ensure it was actually created
+    - lustre_sign_rpms | bool # Only relevant if signing and generation was attempted
+    - lustre_generate_gpg_key_if_missing | bool
+    - gpg_key_check.rc != 0 # Only if key generation was attempted because key was missing
+    # This task ensures the parameter file is cleaned up immediately after use,
+    # especially if the playbook might exit before tempfile module's default cleanup.
+
+# --- RPM Signing using rpmsign ---
 - name: Find RPMs in the versioned RPM path for signing
   ansible.builtin.find:
     paths:
       - "{{ lustre_version_rpm_path }}"
     patterns: "*.rpm"
-  register: rpms_to_sign
-  when: lustre_sign_rpms | bool and lustre_rpm_gpg_key | length > 0
-  # become: true # REMOVED (was not present in previous version, confirmed removal)
+  register: rpms_to_sign_list
+  when: lustre_sign_rpms | bool and lustre_gpg_key_name | length > 0
 
-- name: Sign Lustre RPMs
-  community.general.rpm_sign:
-    path: "{{ item.path }}"
-    key_id: "{{ lustre_rpm_gpg_key }}"
-  loop: "{{ rpms_to_sign.files }}"
+- name: Create temporary GPG passphrase file
+  ansible.builtin.tempfile:
+    state: file
+    suffix: gpg_passphrase
+  register: gpg_passphrase_tempfile
   when:
     - lustre_sign_rpms | bool
-    - lustre_rpm_gpg_key | length > 0
-    - rpms_to_sign.files is defined
-    - rpms_to_sign.files | length > 0
-  # become: true # REMOVED as per instruction
+    - lustre_gpg_key_name | length > 0
+    - rpms_to_sign_list.files is defined # Check if find returned anything
+    - rpms_to_sign_list.files | length > 0
+    - (lustre_gpg_passphrase_file | length > 0) or (lustre_gpg_passphrase is defined and lustre_gpg_passphrase | length > 0)
+
+- name: Populate temporary GPG passphrase file
+  ansible.builtin.copy:
+    content: "{{ lookup('file', lustre_gpg_passphrase_file) if lustre_gpg_passphrase_file | length > 0 else (lustre_gpg_passphrase if lustre_gpg_passphrase is defined else '') }}"
+    dest: "{{ gpg_passphrase_tempfile.path }}"
+    mode: '0400' # Correct YAML representation for octal mode
+  no_log: true # Avoids logging passphrase if it came from direct var
+  when:
+    - lustre_sign_rpms | bool # Redundant due to tempfile condition, but safe
+    - gpg_passphrase_tempfile.path is defined # Ensure tempfile was created
+
+- name: Sign Lustre RPMs using rpmsign
+  ansible.builtin.command: >
+    bash -c
+    "{% if gpg_passphrase_tempfile.path is defined and gpg_passphrase_tempfile.path | length > 0 %}exec 3< {{ gpg_passphrase_tempfile.path | quote }};{% else %}exec 3< /dev/null;{% endif %}
+    rpmsign --define '_gpg_name {{ lustre_gpg_key_name | quote }}'
+            --define '_signature %{_gpg_name}'
+            --define '__gpg_sign_cmd %{__gpg} gpg --pinentry-mode loopback --force-v3-sigs --batch --verbose --no-armor {{ (gpg_passphrase_tempfile.path is defined and gpg_passphrase_tempfile.path | length > 0) | ternary('--passphrase-fd 3', '') }} --no-secmem-warning -u %{_gpg_name} -sbo %{__signature_filename} %{__plaintext_filename}'
+            --resign {{ item.path | quote }}"
+  loop: "{{ rpms_to_sign_list.files }}"
+  register: rpm_sign_result
+  changed_when: rpm_sign_result.rc == 0
+  when:
+    - lustre_sign_rpms | bool
+    - lustre_gpg_key_name | length > 0
+    - rpms_to_sign_list.files is defined
+    - rpms_to_sign_list.files | length > 0
+  environment: "{{ { 'GNUPGHOME': lustre_gpg_home } if lustre_gpg_home | length > 0 else {} }}"
+
+- name: Remove temporary GPG passphrase file
+  ansible.builtin.file:
+    path: "{{ gpg_passphrase_tempfile.path }}"
+    state: absent
+  when:
+    - gpg_passphrase_tempfile.path is defined
