@@ -1,0 +1,49 @@
+galaxy_info:
+  author: Your Name
+  description: Ansible role to build Lustre from source and create RPMs.
+  company: Your Company (optional)
+
+  # If the issue tracker for your role is not on github, uncomment the
+  # next line and provide a value
+  # issue_tracker_url: http://example.com/issue/tracker
+
+  # Choose a valid license ID from https://spdx.org/licenses/
+  # Example: Apache-2.0, MIT, GPL-2.0-or-later, GPL-3.0-only
+  license: MIT
+
+  min_ansible_version: '2.9' # Or your role's minimum supported version
+
+  # If this role is platform-specific, uncomment and edit this section.
+  # platforms:
+  # - name: EL
+  #   versions:
+  #   - '7'
+  #   - '8'
+  # - name: Fedora
+  #   versions:
+  #   - all
+  # - name: Ubuntu
+  #   versions:
+  #   - focal
+  #   - jammy
+  # - name: Debian
+  #   versions:
+  #   - buster
+  #   - bullseye
+  # - name: SLES
+  #   versions:
+  #   - '12' # Be more specific if possible, e.g., 12SP5
+  #   - '15' # Be more specific if possible, e.g., 15SP3
+
+  galaxy_tags: []
+    # List tags that apply to your role here, like 'lustre', 'build', 'hpc', 'filesystem', 'rpm'
+    # For example:
+    # - lustre
+    # - build
+    # - hpc
+    # - filesystem
+    # - rpm
+
+dependencies: []
+  # List your role dependencies here, for example:
+  # - role: another_role_name
