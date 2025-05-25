@@ -8,6 +8,13 @@
   when: ansible_os_family == "RedHat"
   become: true # KEEP
 
+- name: Enable CodeReady Builder (CRB) repository
+  ansible.builtin.command:
+    cmd: /usr/bin/crb enable
+  become: true
+  changed_when: false
+  when: ansible_os_family == "RedHat"
+
 - name: Install Lustre build dependencies
   ansible.builtin.package:
     name:
@@ -40,7 +47,7 @@
       - net-tools
       - patchutils
       - pciutils-devel
-      - perl-ExtUtils-Embed
+      - perl-ExtUtils-MakeMaker # Changed from perl-ExtUtils-Embed
       - pesign
       - python3-devel
       - rpm-build
@@ -54,28 +61,15 @@
       - asciidoc
       - zlib-devel
       - kernel-devel
-      # RHEL/CentOS specific
+      # RHEL/CentOS/AlmaLinux specific
       - redhat-rpm-config
       - yum-utils
+      - openmpi-devel
+      - libnl3-devel
+      - kernel-abi-stablelists
+      - kernel-rpm-macros
     state: present
     update_cache: true
-  become: true # KEEP
-  vars:
-    perl_extutils_pkg: "{{ 'perl-ExtUtils-MakeMaker' if ansible_os_family == 'RedHat' else 'perl-ExtUtils-Embed' }}"
-
-- name: Ensure perl-ExtUtils-MakeMaker (for Embed) is installed on RHEL family
-  ansible.builtin.package:
-    name: "{{ perl_extutils_pkg }}"
-    state: present
-  become: true # KEEP (Matched name from existing file, prompt was slightly different but intent clear)
-  when: ansible_os_family == "RedHat"
-
-- name: Install kernel development package for SLES family
-  ansible.builtin.package:
-    name:
-      - kernel-default-devel
-    state: present
-  when: ansible_os_family == "Suse"
   become: true # KEEP
 
 - name: Ensure base source directory exists
@@ -276,3 +270,16 @@
     state: absent
   when:
     - gpg_passphrase_tempfile.path is defined
+
+- name: Add OpenMPI to PATH in .bashrc if not already present
+  ansible.builtin.blockinfile:
+    path: "{{ ansible_env.HOME }}/.bashrc"
+    block: |
+      # Add OpenMPI to PATH
+      if [[ ":$PATH:" != *":/usr/lib64/openmpi/bin:"* ]]; then
+        export PATH="/usr/lib64/openmpi/bin:$PATH"
+      fi
+    marker: "# {mark} ANSIBLE MANAGED BLOCK FOR OPENMPI"
+    create: true
+    mode: '0644'
+  # This task does NOT use become: true

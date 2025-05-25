@@ -2,17 +2,18 @@
 
 ## Purpose
 
-This Ansible role automates the process of compiling the Lustre file system from source code, generating RPM packages, and optionally signing these RPMs. It is designed to work on RHEL/CentOS and SLES-based systems.
+This Ansible role automates the process of compiling the Lustre file system from source code and generating RPM packages. It is designed to work on **AlmaLinux 9 and compatible RHEL 9 derivatives**. Optionally, it can handle GPG key generation and RPM signing.
 
 ## Requirements
 
 -   Ansible 2.9 or later.
--   Target machine must be RHEL/CentOS or SLES based.
+-   Target machine must be **AlmaLinux 9 or a compatible RHEL 9 derivative**.
 -   Internet access on the target machine for cloning the Lustre repository and downloading dependencies.
 -   Sufficient disk space (e.g., 30GB+ recommended for source and build artifacts) and system resources (CPU, RAM) for compilation.
+-   The **CodeReady Builder (CRB) repository (or its equivalent, e.g., `ol9_codeready_builder` for Oracle Linux) must be available on the target system; the role will attempt to enable it.**
 -   If running the role as a non-privileged user (i.e., without global `become: true` in your playbook), the paths specified by `lustre_src_path` and `lustre_rpm_path` must be writable by this user. You can override these variables to point to user-writable locations.
 -   If RPM signing (`lustre_sign_rpms: true`) is enabled:
-    -   `gnupg` (or `gnupg2` depending on the OS) and `rpm-sign` packages must be installable (the role attempts to install them).
+    -   `gnupg` (typically `gnupg2`) and `rpm-sign` packages must be installable (the role attempts to install them).
     -   The GPG private key (identified by `lustre_gpg_key_name`) must be available in the GPG keyring of the user executing the signing tasks.
 
 ## Role Variables
@@ -63,15 +64,18 @@ Internal variables used by the role (defined in `vars/main.yml`) include:
 
 ## Dependencies
 
-This role will attempt to install necessary build dependencies using the system's package manager (`yum` for RedHat family, `zypper` for Suse family). This includes:
+This role will attempt to install necessary build dependencies using the `dnf` package manager. Key dependencies include:
 - Standard development tools (gcc, make, automake, etc.).
-- `kernel-devel` package. By default, this will be for the currently running kernel.
-- If `lustre_sign_rpms` is `true`, `gnupg` (or `gnupg2`) and `rpm-sign` packages will also be installed.
+- `kernel-devel` for the running kernel.
+- `perl-ExtUtils-MakeMaker`.
+- Specific Lustre build requirements such as `openmpi-devel`, `libnl3-devel`, `kernel-abi-stablelists`, and `kernel-rpm-macros`.
+- The role will attempt to enable the CodeReady Builder (CRB) repository (or its equivalent for RHEL derivatives like `ol9_codeready_builder`) to satisfy some of these dependencies.
+- If `lustre_sign_rpms` is `true`, `gnupg` (typically `gnupg2`) and `rpm-sign` packages will also be installed.
 These package installation steps require privilege escalation (e.g., `become: true`).
 
 ## Example Playbook
 
-Here is an example of how to use this role in a playbook (`playbook.yml`):
+Here is an example of how to use this role in a playbook (a `playbook.yml` file is not included in the role itself):
 
 ```yaml
 ---
@@ -90,14 +94,15 @@ Here is an example of how to use this role in a playbook (`playbook.yml`):
     # lustre_rpm_path: "/home/myuser/lustre_build/rpms" # Example for non-privileged path
 
   roles:
-    - ansible-role-lustre-build
+    - ansible-role-lustre-build # Assumes role is in a standard Ansible roles path
 ```
 
 ## Usage Notes
 
 -   **Permissions and `become`**:
-    -   Tasks related to package installation (`epel-release`, build dependencies, `gnupg`, `rpm-sign`) use `become: true` and require root privileges.
+    -   Tasks related to package installation (EPEL, CRB, build dependencies, `gnupg`, `rpm-sign`) use `become: true` and require root privileges.
     -   Other tasks (directory creation for source/RPMs, git cloning, compilation, GPG key generation, RPM signing) are designed to run with the privileges of the Ansible user. If you are not running the playbook with global `become: true`, ensure that the directories specified by `lustre_src_path` and `lustre_rpm_path` (and `lustre_gpg_home` if set to a non-default path) are writable by the Ansible user, or override these variables to point to user-writable paths.
+-   **OpenMPI Path**: The role will attempt to add `/usr/lib64/openmpi/bin` to the Ansible user's `PATH` in their `~/.bashrc` file to ensure OpenMPI tools are found during the build. This is done idempotently using a marked block.
 -   **RPM Signing**:
     -   The role now uses direct shell commands for `gpg` (key generation) and `rpmsign` (signing RPMs).
     -   **GPG Key Handling**:
