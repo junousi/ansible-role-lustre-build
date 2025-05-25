@@ -253,13 +253,7 @@
     - gpg_passphrase_tempfile.path is defined # Ensure tempfile was created
 
 - name: Sign Lustre RPMs using rpmsign
-  ansible.builtin.command: >
-    bash -c
-    "{% if gpg_passphrase_tempfile.path is defined and gpg_passphrase_tempfile.path | length > 0 %}exec 3< {{ gpg_passphrase_tempfile.path | quote }};{% else %}exec 3< /dev/null;{% endif %}
-    rpmsign --define '_gpg_name {{ lustre_gpg_key_name }}'
-            --define '_signature %{_gpg_name}'
-            --define '__gpg_sign_cmd %{__gpg} gpg --pinentry-mode loopback --force-v3-sigs --batch --verbose --no-armor {{ (gpg_passphrase_tempfile.path is defined and gpg_passphrase_tempfile.path | length > 0) | ternary('--passphrase-fd 3', '') }} --no-secmem-warning -u %{_gpg_name} -sbo %{__signature_filename} %{__plaintext_filename}'
-            --resign {{ item.path | quote }}"
+  ansible.builtin.command: "bash -c \"{% if gpg_passphrase_tempfile.path is defined and gpg_passphrase_tempfile.path | length > 0 %}exec 3< {{ gpg_passphrase_tempfile.path | quote }};{% else %}exec 3< /dev/null;{% endif %} rpmsign --define '_gpg_name {{ lustre_gpg_key_name }}' --define '_signature %{_gpg_name}' --define '__gpg_sign_cmd %{__gpg} gpg --pinentry-mode loopback --force-v3-sigs --batch --verbose --no-armor {{ (gpg_passphrase_tempfile.path is defined and gpg_passphrase_tempfile.path | length > 0) | ternary('--passphrase-fd 3', '') }} --no-secmem-warning -u %{_gpg_name} -sbo %{__signature_filename} %{__plaintext_filename}' --resign {{ item.path | quote }}\""
   loop: "{{ rpms_to_sign_list.files }}"
   register: rpm_sign_result
   changed_when: rpm_sign_result.rc == 0
