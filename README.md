@@ -118,13 +118,17 @@ Here is an example of how to use this role in a playbook (a `playbook.yml` file 
 -   **Kernel Version**: Lustre compilation is sensitive to the `kernel-devel` package version. The role installs `kernel-devel` for the running kernel by default.
 -   **Compilation Time**: Lustre compilation can be a lengthy process.
 -   **Idempotency**:
-    -   The role now includes checks to avoid re-running build and signing tasks if suitable RPMs already exist in the destination directory (`{{ lustre_version_rpm_path }}`).
-    -   **If `lustre_sign_rpms` is `false`**: The role will skip the main build, move, and signing-prep tasks if any `*.rpm` files are found in `{{ lustre_version_rpm_path }}`. It assumes these existing RPMs are sufficient.
-    -   **If `lustre_sign_rpms` is `true`**:
-        -   The role checks if `*.rpm` files exist in `{{ lustre_version_rpm_path }}`.
-        -   If they exist, it then verifies if *all* of these RPMs have a valid GPG signature (using `rpm --checksig`). This check confirms they are signed by *any* key and the signature is valid; it does not currently re-verify against the specific `lustre_gpg_key_name`.
-        -   If RPMs exist and all are found to be signed, the main build, move, and signing tasks will be skipped.
-    -   Tasks related to initial setup (like CRB/EPEL enablement, GPG dependency installation if signing is intended but RPMs are missing) might still run even if the build itself is skipped.
-    -   Currently, there is no explicit variable to force a rebuild if RPMs already exist. To force a rebuild, you would need to manually remove the RPMs from the `{{ lustre_version_rpm_path }}` directory before running the role.
+
+    This role implements a simplified idempotency check to avoid unnecessary recompilation of Lustre:
+
+    -   Before starting the build process (running `autogen.sh`, `configure`, `make rpms`), the role checks if any `*.rpm` files already exist in the final RPM destination directory (`{{ lustre_version_rpm_path }}`).
+    -   If `*.rpm` files are found in this destination directory, the following sequence of tasks will be skipped:
+        -   Running `autogen.sh`
+        -   Running `configure`
+        -   The main RPM compilation step (`make rpms`)
+        -   Finding RPMs in the build directory
+        -   Moving compiled RPMs from the build directory to the final destination.
+    -   Tasks related to setting up build dependencies and the entire RPM signing process (if enabled) will still execute. The signing process will attempt to sign any RPMs found in `{{ lustre_version_rpm_path }}`, whether they were just built or were pre-existing.
+    -   To force a complete rebuild even if RPMs exist in the destination, you should manually remove the contents of the `{{ lustre_version_rpm_path }}` directory before running this role.
 
 ```

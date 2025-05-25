@@ -71,7 +71,6 @@
     state: present
     update_cache: true
   become: true # KEEP
-  when: not skip_build_and_sign | default(false)
 
 - name: Ensure base source directory exists
   ansible.builtin.file:
@@ -96,84 +95,13 @@
     mode: '0755'
   # become: true # REMOVED as per instruction
 
-- name: Stat RPM output directory for idempotency check
-  ansible.builtin.stat:
-    path: "{{ lustre_version_rpm_path }}"
-  register: lustre_version_rpm_path_stat
-
-- name: Check for existing RPMs in destination (for idempotency)
+- name: Check for existing RPMs in final destination for idempotency
   ansible.builtin.find:
-    paths: "{{ lustre_version_rpm_path }}"
+    paths:
+      - "{{ lustre_version_rpm_path }}"
     patterns: "*.rpm"
-  register: existing_rpms_in_dest
-  when: lustre_version_rpm_path_stat.stat.exists and lustre_version_rpm_path_stat.stat.isdir
-
-- name: Initialize skip_build_and_sign fact
-  ansible.builtin.set_fact:
-    skip_build_and_sign: false
-
-    # --- Advanced Idempotency Checks (continued) ---
-    # These tasks determine if a build/signing can be skipped if RPMs already exist and are correctly signed.
-
-    - name: Initialize _rpms_are_signed_check_passed fact
-      ansible.builtin.set_fact:
-        _rpms_are_signed_check_passed: false # Default to false, only set true if all checks pass
-
-    - name: Check signature status of existing RPMs if signing is enabled
-      ansible.builtin.command: "rpm --checksig {{ item.path }}"
-      loop: "{{ existing_rpms_in_dest.files }}"
-      register: existing_rpm_sig_check_results
-      when:
-        - lustre_sign_rpms | bool
-        - existing_rpms_in_dest.files is defined # Avoid error if find returned no files
-        - existing_rpms_in_dest.files | length > 0
-      changed_when: false
-      failed_when: false # Don't fail the play, just check results
-
-    - name: Determine if all existing RPMs are signed
-      ansible.builtin.set_fact:
-        _rpms_are_signed_check_passed: >-
-          {% set all_good = true %} {# Assume true initially only if loop runs #}
-          {% if existing_rpm_sig_check_results.results is defined %}
-            {% for result in existing_rpm_sig_check_results.results %}
-              {% if result.rc != 0 %} {# rpm --checksig returns 0 for a valid signature, even if key is unknown #}
-                {% set all_good = false %}
-                {% break %}
-              {% endif %}
-            {% endfor %}
-          {% else %}
-            {# This block means the loop didn't run (no RPMs or check_results undefined)
-               If there were no RPMs to check, they can't all be "signed and ok".
-               However, this task only runs if RPMs *were* found.
-               So, if results are undefined here, it's an unexpected state or no items looped.
-               Effectively, if loop was empty or results not there, not all are signed. #}
-            {% set all_good = false %}
-          {% endif %}
-          {{ all_good }}
-      when:
-        - lustre_sign_rpms | bool
-        - existing_rpms_in_dest.files is defined
-        - existing_rpms_in_dest.files | length > 0
-        # Only run if the previous signature check task actually ran and produced results.
-        - existing_rpm_sig_check_results.results is defined
-
-    - name: Set final skip_build_and_sign decision
-      ansible.builtin.set_fact:
-        skip_build_and_sign: >-
-          {% if existing_rpms_in_dest.files is defined and existing_rpms_in_dest.files | length > 0 %} {# If RPMs exist in destination #}
-            {% if lustre_sign_rpms | bool %} {# And we are supposed to sign them #}
-              {{ _rpms_are_signed_check_passed | default(false) }} {# Then skip only if they are already signed #}
-            {% else %} {# RPMs exist, and we are NOT supposed to sign them #}
-              true {# So, skip building (they are already there) #}
-            {% endif %}
-          {% else %} {# No RPMs exist in destination #}
-            false {# So, do not skip, we need to build them #}
-          {% endif %}
-
-    # This is a debug task, can be removed or commented out later
-    - name: Display idempotency skip decision
-      ansible.builtin.debug:
-        var: skip_build_and_sign
+    file_type: file # Be explicit
+  register: found_rpms_in_destination
 
 - name: Run autogen.sh for Lustre
   ansible.builtin.shell:
@@ -183,7 +111,7 @@
   environment:
     PATH: "/usr/lib64/openmpi/bin:{{ ansible_env.PATH }}"
   # become: true # REMOVED as per instruction
-  when: not skip_build_and_sign | default(false)
+  when: not (found_rpms_in_destination.matched > 0)
 
 - name: Run configure for Lustre
   ansible.builtin.command:
@@ -193,7 +121,7 @@
   environment:
     PATH: "/usr/lib64/openmpi/bin:{{ ansible_env.PATH }}"
   # become: true # REMOVED as per instruction
-  when: not skip_build_and_sign | default(false)
+  when: not (found_rpms_in_destination.matched > 0)
 
 - name: Build Lustre RPMs
   ansible.builtin.command:
@@ -202,7 +130,7 @@
   environment:
     PATH: "/usr/lib64/openmpi/bin:{{ ansible_env.PATH }}"
   # become: true # REMOVED as per instruction
-  when: not skip_build_and_sign | default(false)
+  when: not (found_rpms_in_destination.matched > 0)
 
 - name: Find generated RPMs
   ansible.builtin.find:
@@ -211,7 +139,7 @@
     recurse: yes
   register: found_rpms
   # become: true # REMOVED as per instruction
-  when: not skip_build_and_sign | default(false)
+  when: not (found_rpms_in_destination.matched > 0)
 
 - name: Move compiled RPMs to destination directory
   ansible.builtin.copy:
@@ -220,7 +148,7 @@
     remote_src: true
     mode: '0644'
   loop: "{{ found_rpms.files }}"
-  when: found_rpms.files | length > 0 and not skip_build_and_sign | default(false)
+  when: found_rpms.files | length > 0 and not (found_rpms_in_destination.matched > 0)
   # become: true # REMOVED as per instruction
 
 - name: Ensure signing utilities are installed (rpm-sign, gnupg)
@@ -229,7 +157,7 @@
       - rpm-sign
       - gnupg
     state: present
-  when: lustre_sign_rpms | bool and lustre_gpg_key_name | length > 0 and not skip_build_and_sign | default(false) # Updated variable name
+  when: lustre_sign_rpms | bool and lustre_gpg_key_name | length > 0 # Updated variable name
   become: true # KEEP
 
 # --- GPG Key Generation (Optional) ---
@@ -243,7 +171,6 @@
     - lustre_sign_rpms | bool
     - lustre_gpg_key_name | length > 0
     - lustre_generate_gpg_key_if_missing | bool
-    - not (skip_build_and_sign | default(false))
   environment: "{{ { 'GNUPGHOME': lustre_gpg_home } if lustre_gpg_home | length > 0 else {} }}"
 
 - name: Create temporary file for GPG batch parameters
@@ -256,7 +183,6 @@
     - lustre_gpg_key_name | length > 0
     - lustre_generate_gpg_key_if_missing | bool
     - gpg_key_check.rc != 0  # Key does not exist
-    - not (skip_build_and_sign | default(false))
 
 - name: Create GPG parameter file for key generation
   ansible.builtin.copy:
@@ -281,7 +207,6 @@
     - lustre_generate_gpg_key_if_missing | bool
     - gpg_key_check.rc != 0  # Key does not exist
     - gpg_param_tempfile.path is defined
-    - not (skip_build_and_sign | default(false))
 
 - name: Generate GPG key pair
   ansible.builtin.command: "gpg --batch --full-generate-key --debug-quick-random {{ gpg_param_tempfile.path }}"
@@ -293,7 +218,6 @@
     - lustre_generate_gpg_key_if_missing | bool
     - gpg_key_check.rc != 0  # Key does not exist
     - gpg_param_tempfile.path is defined
-    - not (skip_build_and_sign | default(false))
   environment: "{{ { 'GNUPGHOME': lustre_gpg_home } if lustre_gpg_home | length > 0 else {} }}"
   # no_log: true # Consider if output of gpg command could be sensitive
 
@@ -306,7 +230,6 @@
     - lustre_sign_rpms | bool # Only relevant if signing and generation was attempted
     - lustre_generate_gpg_key_if_missing | bool
     - gpg_key_check.rc != 0 # Only if key generation was attempted because key was missing
-    - not (skip_build_and_sign | default(false))
     # This task ensures the parameter file is cleaned up immediately after use,
     # especially if the playbook might exit before tempfile module's default cleanup.
 
@@ -317,7 +240,7 @@
       - "{{ lustre_version_rpm_path }}"
     patterns: "*.rpm"
   register: rpms_to_sign_list
-  when: lustre_sign_rpms | bool and lustre_gpg_key_name | length > 0 and not skip_build_and_sign | default(false)
+  when: lustre_sign_rpms | bool and lustre_gpg_key_name | length > 0
 
 - name: Create temporary GPG passphrase file
   ansible.builtin.tempfile:
@@ -330,7 +253,6 @@
     - rpms_to_sign_list.files is defined # Check if find returned anything
     - rpms_to_sign_list.files | length > 0
     - ((lustre_gpg_passphrase_file | length > 0) or (lustre_gpg_passphrase is defined and lustre_gpg_passphrase | length > 0))
-    - not (skip_build_and_sign | default(false))
 
 - name: Populate temporary GPG passphrase file
   ansible.builtin.copy:
@@ -341,7 +263,6 @@
   when:
     - lustre_sign_rpms | bool # Redundant due to tempfile condition, but safe
     - gpg_passphrase_tempfile.path is defined # Ensure tempfile was created
-    - not (skip_build_and_sign | default(false))
 
 - name: Sign Lustre RPMs using rpmsign
   ansible.builtin.command: "bash -c \"{% if gpg_passphrase_tempfile.path is defined and gpg_passphrase_tempfile.path | length > 0 %}exec 3< {{ gpg_passphrase_tempfile.path | quote }};{% else %}exec 3< /dev/null;{% endif %} rpmsign --define '_gpg_name {{ lustre_gpg_key_name }}' --define '_signature %{_gpg_name}' --define '__gpg_sign_cmd %{__gpg} gpg --pinentry-mode loopback --force-v3-sigs --batch --verbose --no-armor {{ (gpg_passphrase_tempfile.path is defined and gpg_passphrase_tempfile.path | length > 0) | ternary('--passphrase-fd 3', '') }} --no-secmem-warning -u %{_gpg_name} -sbo %{__signature_filename} %{__plaintext_filename}' --resign {{ item.path | quote }}\""
@@ -353,7 +274,6 @@
     - lustre_gpg_key_name | length > 0
     - rpms_to_sign_list.files is defined
     - rpms_to_sign_list.files | length > 0
-    - not (skip_build_and_sign | default(false))
   environment: "{{ { 'GNUPGHOME': lustre_gpg_home } if lustre_gpg_home | length > 0 else {} }}"
 
 - name: Remove temporary GPG passphrase file
@@ -362,7 +282,6 @@
     state: absent
   when:
     - gpg_passphrase_tempfile.path is defined
-    - not (skip_build_and_sign | default(false))
 
 - name: Add OpenMPI to PATH in .bashrc if not already present
   ansible.builtin.blockinfile:
@@ -376,4 +295,3 @@
     create: true
     mode: '0644'
   # This task does NOT use become: true
-  when: not skip_build_and_sign | default(false)
