@@ -148,7 +148,7 @@
     remote_src: true
     mode: '0644'
   loop: "{{ found_rpms.files }}"
-  when: found_rpms.files | length > 0 and not (found_rpms_in_destination.matched > 0)
+  when: found_rpms.files | default([]) | length > 0 and not (found_rpms_in_destination.matched > 0)
   # become: true # REMOVED as per instruction
 
 - name: Ensure signing utilities are installed (rpm-sign, gnupg)
