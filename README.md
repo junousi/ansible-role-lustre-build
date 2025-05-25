@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This Ansible role automates the process of compiling the Lustre file system from source code and generating RPM packages. It is designed to work on **AlmaLinux 9 and compatible RHEL 9 derivatives**. Optionally, it can handle GPG key generation and RPM signing.
+This Ansible role automates the process of compiling **Lustre client components** from source code and generating RPM packages. It is designed to work on **AlmaLinux 9 and compatible RHEL 9 derivatives**. Optionally, it can handle GPG key generation and RPM signing. By default, the role is configured to build Lustre client RPMs.
 
 ## Requirements
 
@@ -102,7 +102,7 @@ Here is an example of how to use this role in a playbook (a `playbook.yml` file 
 -   **Permissions and `become`**:
     -   Tasks related to package installation (EPEL, CRB, build dependencies, `gnupg`, `rpm-sign`) use `become: true` and require root privileges.
     -   Other tasks (directory creation for source/RPMs, git cloning, compilation, GPG key generation, RPM signing) are designed to run with the privileges of the Ansible user. If you are not running the playbook with global `become: true`, ensure that the directories specified by `lustre_src_path` and `lustre_rpm_path` (and `lustre_gpg_home` if set to a non-default path) are writable by the Ansible user, or override these variables to point to user-writable paths.
--   **OpenMPI Path**: The role will attempt to add `/usr/lib64/openmpi/bin` to the Ansible user's `PATH` in their `~/.bashrc` file to ensure OpenMPI tools are found during the build. This is done idempotently using a marked block.
+-   **OpenMPI PATH Handling**: To ensure `mpicc` and other OpenMPI tools are available during compilation, the role temporarily prepends `/usr/lib64/openmpi/bin` to the `PATH` environment variable for the core build tasks (`autogen.sh`, `configure`, `make rpms`). It also adds this path to the Ansible user's `~/.bashrc` for future interactive sessions, ensuring it's available if the user logs in to continue work or troubleshoot. This `.bashrc` modification is done idempotently using a marked block.
 -   **RPM Signing**:
     -   The role now uses direct shell commands for `gpg` (key generation) and `rpmsign` (signing RPMs).
     -   **GPG Key Handling**:

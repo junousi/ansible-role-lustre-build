@@ -93,19 +93,25 @@
     cmd: sh autogen.sh
     chdir: "{{ lustre_checkout_path }}"
     creates: "{{ lustre_checkout_path }}/configure"
+  environment:
+    PATH: "/usr/lib64/openmpi/bin:{{ ansible_env.PATH }}"
   # become: true # REMOVED as per instruction
 
 - name: Run configure for Lustre
   ansible.builtin.command:
-    cmd: ./configure --enable-server --enable-client
+    cmd: ./configure --enable-client
     chdir: "{{ lustre_checkout_path }}"
     creates: "{{ lustre_checkout_path }}/Makefile"
+  environment:
+    PATH: "/usr/lib64/openmpi/bin:{{ ansible_env.PATH }}"
   # become: true # REMOVED as per instruction
 
 - name: Build Lustre RPMs
   ansible.builtin.command:
     cmd: make rpms
     chdir: "{{ lustre_checkout_path }}"
+  environment:
+    PATH: "/usr/lib64/openmpi/bin:{{ ansible_env.PATH }}"
   # become: true # REMOVED as per instruction
 
 - name: Ensure RPM output directory exists
@@ -250,7 +256,7 @@
   ansible.builtin.command: >
     bash -c
     "{% if gpg_passphrase_tempfile.path is defined and gpg_passphrase_tempfile.path | length > 0 %}exec 3< {{ gpg_passphrase_tempfile.path | quote }};{% else %}exec 3< /dev/null;{% endif %}
-    rpmsign --define '_gpg_name {{ lustre_gpg_key_name | quote }}'
+    rpmsign --define '_gpg_name {{ lustre_gpg_key_name }}'
             --define '_signature %{_gpg_name}'
             --define '__gpg_sign_cmd %{__gpg} gpg --pinentry-mode loopback --force-v3-sigs --batch --verbose --no-armor {{ (gpg_passphrase_tempfile.path is defined and gpg_passphrase_tempfile.path | length > 0) | ternary('--passphrase-fd 3', '') }} --no-secmem-warning -u %{_gpg_name} -sbo %{__signature_filename} %{__plaintext_filename}'
             --resign {{ item.path | quote }}"
